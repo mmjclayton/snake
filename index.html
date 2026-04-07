@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snake</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #111;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Courier New', monospace;
+    color: #0f0;
+  }
+  #wrapper {
+    text-align: center;
+  }
+  #score {
+    font-size: 24px;
+    margin-bottom: 10px;
+  }
+  canvas {
+    border: 2px solid #0f0;
+    display: block;
+    margin: 0 auto;
+  }
+  #controls {
+    margin-top: 14px;
+    font-size: 14px;
+    color: #0a0;
+    line-height: 1.6;
+  }
+  #controls kbd {
+    display: inline-block;
+    border: 1px solid #0a0;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: #0f0;
+  }
+</style>
+</head>
+<body>
+<div id="wrapper">
+  <div id="score">Score: 0 &nbsp;|&nbsp; Best: 0</div>
+  <canvas id="game" width="400" height="400"></canvas>
+  <div id="controls">
+    <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&larr;</kbd> <kbd>&rarr;</kbd> Move
+    &nbsp;&middot;&nbsp;
+    <kbd>SPACE</kbd> Restart
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+
+const GRID = 20;
+const COLS = canvas.width / GRID;
+const ROWS = canvas.height / GRID;
+const BASE_TICK = 100;
+const SPEED_STEP = 5;    // speed up every N points
+const SPEED_REDUCE = 8;  // ms shaved off per tier
+const MIN_TICK = 40;
+
+let snake, dir, nextDir, food, score, gameOver, interval, tickMs, countdown;
+let highScore = parseInt(localStorage.getItem('snakeHighScore')) || 0;
+
+// Pulse effect state
+let pulse = null; // { x, y, startTime }
+const PULSE_DURATION = 300;
+
+// Fireworks system
+const FIREWORK_COLORS = ['#ff0', '#f0f', '#0ff', '#f90', '#f44', '#4f4', '#44f', '#fff'];
+const FIREWORK_DURATION = 1200;
+const SPARK_COUNT = 28;
+const FIREWORK_BURST_COUNT = 5;
+let fireworks = []; // array of { sparks[], startTime }
+let fireworksAnimating = false;
+
+function launchFireworks() {
+  const now = performance.now();
+  for (let i = 0; i < FIREWORK_BURST_COUNT; i++) {
+    const cx = 40 + Math.random() * (canvas.width - 80);
+    const cy = 40 + Math.random() * (canvas.height - 80);
+    const color = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
+    const sparks = [];
+    for (let j = 0; j < SPARK_COUNT; j++) {
+      const angle = (Math.PI * 2 * j) / SPARK_COUNT + (Math.random() - 0.5) * 0.3;
+      const speed = 60 + Math.random() * 80;
+      sparks.push({
+        x: cx, y: cy,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        color: color,
+        size: 1.5 + Math.random() * 2
+      });
+    }
+    fireworks.push({ sparks, startTime: now + i * 120 });
+  }
+  if (!fireworksAnimating) {
+    fireworksAnimating = true;
+    requestAnimationFrame(animateFireworks);
+  }
+}
+
+function animateFireworks(now) {
+  // Remove expired fireworks
+  fireworks = fireworks.filter(f => now - f.startTime < FIREWORK_DURATION);
+  if (fireworks.length === 0) { fireworksAnimating = false; return; }
+  draw();
+  requestAnimationFrame(animateFireworks);
+}
+
+function drawFireworks() {
+  if (fireworks.length === 0) return;
+  const now = performance.now();
+  ctx.save();
+  for (const fw of fireworks) {
+    const elapsed = now - fw.startTime;
+    if (elapsed < 0) continue; // staggered, hasn't started yet
+    const t = Math.min(elapsed / FIREWORK_DURATION, 1);
+    const alpha = 1 - t;
+    const gravity = 40;
+    for (const sp of fw.sparks) {
+      const sec = elapsed / 1000;
+      const px = sp.x + sp.vx * sec;
+      const py = sp.y + sp.vy * sec + 0.5 * gravity * sec * sec;
+      ctx.globalAlpha = alpha * (0.5 + Math.random() * 0.5);
+      ctx.fillStyle = sp.color;
+      ctx.fillRect(px - sp.size / 2, py - sp.size / 2, sp.size, sp.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function startPulse(x, y) {
+  pulse = { x, y, startTime: performance.now() };
+  if (!gameOver && countdown <= 0) requestAnimationFrame(animatePulse);
+}
+
+function animatePulse() {
+  if (!pulse) return;
+  const elapsed = performance.now() - pulse.startTime;
+  if (elapsed >= PULSE_DURATION) { pulse = null; return; }
+  draw();
+  requestAnimationFrame(animatePulse);
+}
+
+function drawPulse() {
+  if (!pulse) return;
+  const elapsed = performance.now() - pulse.startTime;
+  if (elapsed >= PULSE_DURATION) { pulse = null; return; }
+  const t = elapsed / PULSE_DURATION;
+  const radius = GRID * (0.8 + t * 1.8);
+  const alpha = 0.45 * (1 - t);
+  const cx = pulse.x * GRID + GRID / 2;
+  const cy = pulse.y * GRID + GRID / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(0, 255, 0, ' + alpha + ')';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function updateScoreDisplay() {
+  scoreEl.textContent = 'Score: ' + score + '  |  Best: ' + highScore;
+}
+
+function setSpeed() {
+  const tier = Math.floor(score / SPEED_STEP);
+  tickMs = Math.max(MIN_TICK, BASE_TICK - tier * SPEED_REDUCE);
+  if (interval) clearInterval(interval);
+  interval = setInterval(update, tickMs);
+}
+
+function init() {
+  snake = [{ x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) }];
+  dir = { x: 1, y: 0 };
+  nextDir = { x: 1, y: 0 };
+  score = 0;
+  gameOver = false;
+  countdown = 3;
+  fireworks = [];
+  pulse = null;
+  updateScoreDisplay();
+  spawnFood();
+  if (interval) clearInterval(interval);
+  tickMs = BASE_TICK;
+  draw();
+  const countdownInterval = setInterval(() => {
+    countdown--;
+    draw();
+    if (countdown <= 0) {
+      clearInterval(countdownInterval);
+      countdown = 0;
+      interval = setInterval(update, tickMs);
+    }
+  }, 1000);
+}
+
+function spawnFood() {
+  while (true) {
+    food = {
+      x: Math.floor(Math.random() * COLS),
+      y: Math.floor(Math.random() * ROWS)
+    };
+    if (!snake.some(s => s.x === food.x && s.y === food.y)) break;
+  }
+}
+
+function update() {
+  if (gameOver) return;
+
+  dir = { ...nextDir };
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+  if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
+      snake.some(s => s.x === head.x && s.y === head.y)) {
+    gameOver = true;
+    clearInterval(interval);
+    draw();
+    return;
+  }
+
+  snake.unshift(head);
+
+  if (head.x === food.x && head.y === food.y) {
+    startPulse(head.x, head.y);
+    score++;
+    if (score > highScore) {
+      highScore = score;
+      localStorage.setItem('snakeHighScore', highScore);
+    }
+    updateScoreDisplay();
+    if (score % SPEED_STEP === 0) {
+      setSpeed();
+      launchFireworks();
+    }
+    spawnFood();
+  } else {
+    snake.pop();
+  }
+
+  draw();
+}
+
+function drawGrid() {
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x <= canvas.width; x += GRID) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvas.height);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= canvas.height; y += GRID) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawGrid();
+
+  // Food
+  ctx.fillStyle = '#f00';
+  ctx.fillRect(food.x * GRID + 1, food.y * GRID + 1, GRID - 2, GRID - 2);
+
+  // Snake
+  snake.forEach((seg, i) => {
+    ctx.fillStyle = i === 0 ? '#0f0' : '#0c0';
+    ctx.fillRect(seg.x * GRID + 1, seg.y * GRID + 1, GRID - 2, GRID - 2);
+  });
+
+  drawPulse();
+  drawFireworks();
+
+  // Countdown overlay
+  if (countdown > 0) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '72px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText(countdown, canvas.width / 2, canvas.height / 2 + 24);
+    ctx.font = '18px Courier New';
+    ctx.fillText('Get ready...', canvas.width / 2, canvas.height / 2 + 60);
+  }
+
+  // Game over overlay
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '36px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+    ctx.font = '18px Courier New';
+    ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 15);
+    ctx.fillText('Press SPACE to restart', canvas.width / 2, canvas.height / 2 + 45);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (gameOver && e.code === 'Space') {
+    e.preventDefault();
+    init();
+    return;
+  }
+
+  if (countdown > 0) return;
+
+  switch (e.key) {
+    case 'ArrowUp':    if (dir.y !== 1)  nextDir = { x: 0, y: -1 }; break;
+    case 'ArrowDown':  if (dir.y !== -1) nextDir = { x: 0, y: 1 };  break;
+    case 'ArrowLeft':  if (dir.x !== 1)  nextDir = { x: -1, y: 0 }; break;
+    case 'ArrowRight': if (dir.x !== -1) nextDir = { x: 1, y: 0 };  break;
+  }
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    e.preventDefault();
+  }
+});
+
+init();
+</script>
+</body>
+</html>
