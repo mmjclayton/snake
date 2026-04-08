@@ -281,8 +281,24 @@ function draw() {
 
   // Snake
   snake.forEach((seg, i) => {
-    ctx.fillStyle = i === 0 ? '#0f0' : '#0c0';
-    ctx.fillRect(seg.x * GRID + 1, seg.y * GRID + 1, GRID - 2, GRID - 2);
+    if (i === 0) {
+      // Draw horse head
+      ctx.save();
+      const cx = seg.x * GRID + GRID / 2;
+      const cy = seg.y * GRID + GRID / 2;
+      ctx.translate(cx, cy);
+      // Rotate based on direction
+      const angle = Math.atan2(dir.y, dir.x);
+      ctx.rotate(angle);
+      ctx.font = (GRID - 2) + 'px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('\u{1F40E}', 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#0c0';
+      ctx.fillRect(seg.x * GRID + 1, seg.y * GRID + 1, GRID - 2, GRID - 2);
+    }
   });
 
   drawPulse();
